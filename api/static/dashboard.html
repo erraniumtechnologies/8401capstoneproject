@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Early-Delinquency Risk Dashboard</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2430; --mute:#667085; --line:#e2e6ec; --brand:#1f4e79;
+          --low:#2e7d32; --med:#ed8b00; --high:#c62828; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Times New Roman", Georgia, serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--brand); color:#fff; padding:14px 24px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+  header h1 { font-size:20px; margin:0; }
+  #status { font-size:14px; }
+  #status .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:#bbb; margin-right:6px; }
+  main { max-width:1100px; margin:20px auto; padding:0 16px; }
+  .tabs { display:flex; gap:4px; margin-bottom:12px; }
+  .tab { padding:8px 16px; border:1px solid var(--line); background:#e9edf2; cursor:pointer; border-radius:6px 6px 0 0; font:inherit; }
+  .tab.active { background:var(--card); border-bottom-color:var(--card); font-weight:bold; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:18px; margin-bottom:16px; }
+  h2 { font-size:17px; margin:0 0 10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:12px; }
+  label { display:block; font-size:13px; color:var(--mute); margin-bottom:3px; }
+  input, select, textarea { width:100%; padding:7px 8px; border:1px solid var(--line); border-radius:5px; font:inherit; background:#fff; }
+  button { font:inherit; padding:8px 16px; border-radius:6px; border:1px solid var(--brand); background:var(--brand); color:#fff; cursor:pointer; }
+  button.secondary { background:#fff; color:var(--brand); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .result { display:flex; gap:24px; align-items:center; flex-wrap:wrap; }
+  .gauge { width:200px; }
+  .gauge .bar { height:14px; background:linear-gradient(90deg,var(--low),var(--med),var(--high)); border-radius:7px; position:relative; }
+  .gauge .mark { position:absolute; top:-5px; width:4px; height:24px; background:#000; border-radius:2px; }
+  .gauge .thr { position:absolute; top:-5px; width:2px; height:24px; background:#000; opacity:.35; }
+  .big { font-size:34px; font-weight:bold; }
+  .pill { display:inline-block; padding:3px 12px; border-radius:12px; color:#fff; font-size:14px; }
+  .low { background:var(--low); } .medium { background:var(--med); } .high { background:var(--high); }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; }
+  th { background:#f1f4f8; position:sticky; top:0; }
+  .scroll { max-height:420px; overflow:auto; border:1px solid var(--line); border-radius:6px; }
+  .note { color:var(--mute); font-size:13px; }
+  .err { color:var(--high); margin-top:10px; white-space:pre-wrap; }
+  .kpis { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+  .kpi { border:1px solid var(--line); border-radius:8px; padding:10px 16px; min-width:150px; }
+  .kpi b { display:block; font-size:22px; }
+  .hist { display:flex; align-items:flex-end; gap:3px; height:90px; margin:8px 0 4px; }
+  .hist div { flex:1; background:var(--brand); min-height:1px; border-radius:2px 2px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Early-Delinquency Risk Dashboard</h1>
+  <div id="status"><span class="dot"></span><span id="statusText">connecting…</span></div>
+</header>
+<main>
+  <div class="tabs">
+    <button class="tab active" data-tab="single">Single borrower</button>
+    <button class="tab" data-tab="batch">Batch ranking</button>
+  </div>
+
+  <section id="single">
+    <div class="card">
+      <h2>Borrower details</h2>
+      <p class="note">Enter what you know. Any feature left blank is imputed by the model's fitted pipeline. Derived fields (age band, grade order, first-loan flag, clean-history flag, utilisation) are filled in automatically.</p>
+      <div class="grid" id="form"></div>
+      <div class="row">
+        <button id="scoreBtn">Score borrower</button>
+        <button class="secondary" id="lowBtn" type="button">Load low-risk example</button>
+        <button class="secondary" id="highBtn" type="button">Load high-risk example</button>
+        <button class="secondary" id="clearBtn" type="button">Clear</button>
+      </div>
+      <div class="err" id="singleErr"></div>
+    </div>
+    <div class="card" id="resultCard" style="display:none">
+      <h2>Result</h2>
+      <div class="result">
+        <div><div class="note">Calibrated delinquency probability</div><div class="big" id="prob">–</div></div>
+        <div class="gauge"><div class="bar"><div class="thr" id="thr"></div><div class="mark" id="mark"></div></div>
+          <div class="note">Grey line = deployment threshold</div></div>
+        <div><span class="pill" id="band">–</span><div class="note" id="flagText" style="margin-top:6px"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="batch" style="display:none">
+    <div class="card">
+      <h2>Rank a collections queue</h2>
+      <p class="note">Upload a CSV whose header row uses the model's feature names (columns the model does not know, such as a customer ID, are kept for display but not sent). Up to 10,000 rows.</p>
+      <input type="file" id="csvFile" accept=".csv,text/csv">
+      <div class="row">
+        <button id="batchBtn" disabled>Score and rank</button>
+        <button class="secondary" id="dlBtn" disabled>Download ranked CSV</button>
+      </div>
+      <div class="err" id="batchErr"></div>
+    </div>
+    <div class="card" id="batchOut" style="display:none">
+      <h2>Ranked results</h2>
+      <div class="kpis" id="kpis"></div>
+      <div class="note">Distribution of risk scores (0 → 1)</div>
+      <div class="hist" id="hist"></div>
+      <div class="scroll"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const API = "";   // same origin as the API that serves this page
+let FEATURES = [], THRESHOLD = null;
+
+const FIELDS = [
+  ["Gender","select",["MALE","FEMALE"],"MALE"],
+  ["age","number",null,""],
+  ["Original_Loan_Amount","number",null,""],
+  ["Credit_Limit","number",null,""],
+  ["Estimated_Income","number",null,""],
+  ["Total_Mpesa_Credits_3Months","number",null,""],
+  ["borrowing_frequency","number",null,""],
+  ["days_since_last_loan","number",null,""],
+  ["tenure_days","number",null,""],
+  ["prior_delinq_rate","number",null,""],
+  ["prior_delinq_cnt","number",null,""],
+  ["recent_delinq_rate","number",null,""],
+  ["recency_delinq","number",null,""],
+  ["last_delinq","number",null,""],
+  ["last_arrears","number",null,""],
+  ["prior_max_arrears","number",null,""],
+  ["prior_mean_arrears","number",null,""],
+  ["late_streak","number",null,""],
+  ["ontime_streak","number",null,""],
+  ["share_paid_early","number",null,""],
+  ["repayment_ratio","number",null,""],
+  ["payment_consistency","number",null,""],
+  ["delay_risk_class","select",["","New","Never","Occasional","Frequent","Chronic"],""],
+  ["CRB_Grade","select",["","A","B","C","D","E","X","R"],""],
+  ["CRB_No_Of_Loans_Last_12Months","number",null,""],
+  ["CRB_Max_DPD_Last_2_Months","number",null,""],
+  ["open_month","number",null,""],
+];
+const GRADE = {A:1,B:2,C:3,D:4,E:5,X:6,R:7};
+
+const LOW  = {Gender:"FEMALE",age:41,Original_Loan_Amount:8000,Credit_Limit:20000,Estimated_Income:35000,Total_Mpesa_Credits_3Months:90000,
+  borrowing_frequency:14,days_since_last_loan:22,tenure_days:400,prior_delinq_rate:0,prior_delinq_cnt:0,recent_delinq_rate:0,recency_delinq:0,
+  last_delinq:0,last_arrears:-4,prior_max_arrears:0,prior_mean_arrears:-5,late_streak:0,ontime_streak:14,share_paid_early:0.9,
+  repayment_ratio:1,payment_consistency:0.95,delay_risk_class:"Never",CRB_Grade:"A",CRB_No_Of_Loans_Last_12Months:2,CRB_Max_DPD_Last_2_Months:0,open_month:5};
+const HIGH = {Gender:"MALE",age:24,Original_Loan_Amount:19000,Credit_Limit:20000,Estimated_Income:12000,Total_Mpesa_Credits_3Months:20000,
+  borrowing_frequency:8,days_since_last_loan:3,tenure_days:200,prior_delinq_rate:0.6,prior_delinq_cnt:5,recent_delinq_rate:1,recency_delinq:0.8,
+  last_delinq:1,last_arrears:12,prior_max_arrears:30,prior_mean_arrears:6,late_streak:3,ontime_streak:0,share_paid_early:0,
+  repayment_ratio:0.9,payment_consistency:0.6,delay_risk_class:"Chronic",CRB_Grade:"D",CRB_No_Of_Loans_Last_12Months:9,CRB_Max_DPD_Last_2_Months:8,open_month:11};
+
+const $ = id => document.getElementById(id);
+const fmt = x => (x*100).toFixed(1) + "%";
+
+// ---- form ----
+function buildForm() {
+  const f = $("form"); f.innerHTML = "";
+  for (const [name, type, opts, def] of FIELDS) {
+    const wrap = document.createElement("div");
+    const lab = document.createElement("label"); lab.textContent = name; lab.htmlFor = "f_" + name;
+    let el;
+    if (type === "select") {
+      el = document.createElement("select");
+      for (const o of opts) { const op = document.createElement("option"); op.value = o; op.textContent = o || "(unknown)"; el.appendChild(op); }
+      el.value = def;
+    } else { el = document.createElement("input"); el.type = "number"; el.step = "any"; el.value = def; }
+    el.id = "f_" + name; wrap.append(lab, el); f.appendChild(wrap);
+  }
+}
+function setForm(vals) {
+  for (const [name] of FIELDS) { const el = $("f_" + name); el.value = (name in vals) ? vals[name] : ""; }
+  if (!("Gender" in vals)) $("f_Gender").value = "MALE";
+}
+function readForm() {
+  const d = {};
+  for (const [name, type] of FIELDS) {
+    const v = $("f_" + name).value;
+    if (v === "") continue;
+    d[name] = type === "number" ? Number(v) : v;
+  }
+  return derive(d);
+}
+function derive(d) {
+  if (d.age != null) d.age_band = d.age < 25 ? "<25" : d.age < 35 ? "25-35" : d.age < 45 ? "35-45" : d.age < 55 ? "45-55" : "55+";
+  if (d.CRB_Grade) d.grade_ord = GRADE[d.CRB_Grade];
+  if (d.Original_Loan_Amount != null && d.Credit_Limit) d.utilization_ratio = d.Original_Loan_Amount / d.Credit_Limit;
+  if (d.utilization_ratio != null && d.grade_ord != null) d.util_x_grade = d.utilization_ratio * d.grade_ord;
+  if (d.Original_Loan_Amount != null && d.Estimated_Income) d.loan_to_income = d.Original_Loan_Amount / d.Estimated_Income;
+  if (d.borrowing_frequency != null) d.is_first_loan = d.borrowing_frequency === 0 ? 1 : 0;
+  if (d.prior_delinq_cnt != null && d.borrowing_frequency != null) d.clean_history = (d.prior_delinq_cnt === 0 && d.borrowing_frequency > 0) ? 1 : 0;
+  if (FEATURES.length) for (const k of Object.keys(d)) if (!FEATURES.includes(k)) delete d[k];
+  return d;
+}
+
+// ---- API ----
+async function api(path, body) {
+  const r = await fetch(API + path, body ? { method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify(body) } : undefined);
+  const txt = await r.text(); let js; try { js = JSON.parse(txt); } catch { js = null; }
+  if (!r.ok) throw new Error((js && js.detail ? (typeof js.detail === "string" ? js.detail : JSON.stringify(js.detail)) : txt) || r.statusText);
+  return js;
+}
+async function init() {
+  try {
+    const h = await api("/health");
+    FEATURES = h.features || []; THRESHOLD = h.threshold;
+    $("statusText").textContent = `API online · ${h.backend} · ${h.n_features} features · threshold ${h.threshold.toFixed(3)} (${h.calibrator})`;
+    document.querySelector("#status .dot").style.background = "#7CFC8A";
+  } catch (e) {
+    $("statusText").textContent = "API unreachable: " + e.message;
+    document.querySelector("#status .dot").style.background = "#ff6b6b";
+  }
+}
+
+// ---- single ----
+$("scoreBtn").onclick = async () => {
+  $("singleErr").textContent = "";
+  const features = readForm();
+  if (!Object.keys(features).length) { $("singleErr").textContent = "Enter at least one value."; return; }
+  try {
+    const r = await api("/score", { features });
+    $("resultCard").style.display = "";
+    $("prob").textContent = fmt(r.risk_probability);
+    $("mark").style.left = `calc(${Math.min(r.risk_probability,1)*100}% - 2px)`;
+    $("thr").style.left = `${r.threshold*100}%`;
+    const b = $("band"); b.textContent = r.risk_band.toUpperCase() + " RISK"; b.className = "pill " + r.risk_band;
+    $("flagText").textContent = r.flag ? `Flagged for early intervention (≥ ${r.threshold})` : `Not flagged (< ${r.threshold})`;
+  } catch (e) { $("singleErr").textContent = e.message; }
+};
+$("lowBtn").onclick = () => setForm(LOW);
+$("highBtn").onclick = () => setForm(HIGH);
+$("clearBtn").onclick = () => { buildForm(); $("resultCard").style.display = "none"; };
+
+// ---- batch ----
+let rows = [], header = [], ranked = [];
+function parseCSV(text) {
+  const out = []; let row = [], cur = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"' && text[i+1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { row.push(cur); cur = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i+1] === "\n") i++; row.push(cur); cur = ""; if (row.some(x => x !== "")) out.push(row); row = []; }
+    else cur += c;
+  }
+  row.push(cur); if (row.some(x => x !== "")) out.push(row);
+  return out;
+}
+$("csvFile").onchange = async e => {
+  $("batchErr").textContent = ""; $("batchBtn").disabled = true;
+  const f = e.target.files[0]; if (!f) return;
+  const parsed = parseCSV(await f.text());
+  if (parsed.length < 2) { $("batchErr").textContent = "CSV needs a header row and at least one data row."; return; }
+  header = parsed[0].map(h => h.trim());
+  rows = parsed.slice(1);
+  if (rows.length > 10000) { $("batchErr").textContent = "Maximum 10,000 rows per batch."; return; }
+  const known = header.filter(h => FEATURES.includes(h));
+  if (!known.length) { $("batchErr").textContent = "No column matches a model feature name."; return; }
+  $("batchErr").textContent = `Loaded ${rows.length} rows · ${known.length} recognised feature columns.`;
+  $("batchBtn").disabled = false;
+};
+$("batchBtn").onclick = async () => {
+  $("batchErr").textContent = "";
+  const borrowers = rows.map(r => {
+    const d = {};
+    header.forEach((h, i) => { if (FEATURES.includes(h) && r[i] !== undefined && r[i].trim() !== "") {
+      const n = Number(r[i]); d[h] = (r[i].trim() !== "" && !isNaN(n)) ? n : r[i].trim(); } });
+    return d;
+  });
+  try {
+    const res = await api("/score/batch", { borrowers });
+    ranked = res.ranked.map((x, k) => ({ rank: k + 1, index: x.index, p: x.risk_probability, flag: x.flag, src: rows[x.index] }));
+    renderBatch(res);
+    $("dlBtn").disabled = false;
+  } catch (e) { $("batchErr").textContent = e.message; }
+};
+function renderBatch(res) {
+  $("batchOut").style.display = "";
+  const mean = ranked.reduce((a, x) => a + x.p, 0) / ranked.length;
+  $("kpis").innerHTML = "";
+  for (const [lab, val] of [["Borrowers", res.n], ["Flagged", `${res.n_flagged} (${fmt(res.n_flagged / res.n)})`], ["Mean risk", fmt(mean)], ["Threshold", res.threshold]]) {
+    const k = document.createElement("div"); k.className = "kpi";
+    const b = document.createElement("b"); b.textContent = val; k.append(b, document.createTextNode(lab)); $("kpis").appendChild(k);
+  }
+  const bins = new Array(20).fill(0); ranked.forEach(x => bins[Math.min(19, Math.floor(x.p * 20))]++);
+  const mx = Math.max(...bins); $("hist").innerHTML = "";
+  bins.forEach((c, i) => { const d = document.createElement("div"); d.style.height = (c / mx * 100) + "%"; d.title = `${(i*5)}–${(i+1)*5}%: ${c}`; $("hist").appendChild(d); });
+  const idCols = header.filter(h => !FEATURES.includes(h)).slice(0, 2);
+  const cols = ["Rank", ...idCols, "Risk", "Flag"];
+  $("thead").innerHTML = ""; const tr = document.createElement("tr");
+  cols.forEach(c => { const th = document.createElement("th"); th.textContent = c; tr.appendChild(th); }); $("thead").appendChild(tr);
+  $("tbody").innerHTML = "";
+  ranked.slice(0, 500).forEach(x => {
+    const r = document.createElement("tr");
+    const cells = [x.rank, ...idCols.map(c => x.src[header.indexOf(c)] ?? ""), fmt(x.p), x.flag ? "Yes" : "No"];
+    cells.forEach(v => { const td = document.createElement("td"); td.textContent = v; r.appendChild(td); });
+    $("tbody").appendChild(r);
+  });
+  if (ranked.length > 500) { const r = document.createElement("tr"); const td = document.createElement("td");
+    td.colSpan = cols.length; td.className = "note"; td.textContent = `Showing top 500 of ${ranked.length}. Download the CSV for all rows.`; r.appendChild(td); $("tbody").appendChild(r); }
+}
+$("dlBtn").onclick = () => {
+  const idCols = header.filter(h => !FEATURES.includes(h));
+  const esc = v => { v = String(v ?? ""); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const lines = [["rank", ...idCols, "risk_probability", "flag"].map(esc).join(",")];
+  ranked.forEach(x => lines.push([x.rank, ...idCols.map(c => x.src[header.indexOf(c)]), x.p, x.flag ? 1 : 0].map(esc).join(",")));
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+  a.download = "ranked_collections_queue.csv"; a.click();
+};
+
+// ---- tabs ----
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === t));
+  $("single").style.display = t.dataset.tab === "single" ? "" : "none";
+  $("batch").style.display = t.dataset.tab === "batch" ? "" : "none";
+});
+
+buildForm(); init();
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+services:
+  # Optional: (re)train inside a container. Usage: docker compose run --rm train
+  train:
+    build: .
+    profiles: ["train"]
+    command: ["python", "-m", "src.pipeline", "--no-tune"]
+    environment:
+      DATA_PATH: /data/Digital_Banking_MSC_2024_2025_v3.csv
+      ARTIFACT_DIR: /app/artifacts
+    volumes:
+      - ./data:/data:ro
+      - ./artifacts:/app/artifacts
+  api:
+    build: .
+    ports: ["8000:8000"]
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+    restart: unless-stopped
